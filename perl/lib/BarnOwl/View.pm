@@ -3,6 +3,9 @@ use warnings;
 
 package BarnOwl::View;
 
+use BarnOwl::View::Iterator;
+use BarnOwl::View::RangeList;
+
 our %view_cache;
 
 sub message_deleted {
