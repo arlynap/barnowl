@@ -33,6 +33,7 @@ void owl_global_init(owl_global *g) {
   owl_context_init(&g->ctx);
   owl_context_set_startup(&g->ctx);
 
+  g->markedmsgid=-1;
   g->needrefresh=1;
   g->startupargs=NULL;
 
@@ -49,7 +50,6 @@ void owl_global_init(owl_global *g) {
   owl_keyhandler_init(&g->kh);
   owl_keys_setup_keymaps(&g->kh);
 
-  owl_list_create(&(g->muxevents));
   owl_list_create(&(g->filterlist));
   owl_list_create(&(g->puntlist));
   owl_list_create(&(g->messagequeue));
@@ -115,6 +115,7 @@ void owl_global_init(owl_global *g) {
 
   g->fmtext_seq = 0;
   g->timerlist = NULL;
+  g->interrupted = FALSE;
 }
 
 /* Called once perl has been initialized */
@@ -208,6 +209,24 @@ void owl_global_set_topmsg(owl_global *g, owl_view_iterator *it) {
   } else {
     owl_view_iterator_clone(g->topmsg, it);
   }
+}
+
+/* markedmsgid */
+
+int owl_global_get_markedmsgid(owl_global *g) {
+  return(g->markedmsgid);
+}
+
+void owl_global_set_markedmsgid(owl_global *g, int i) {
+  g->markedmsgid=i;
+  /* i; index of message in the current view.
+  owl_message *m;
+  owl_view *v;
+
+  v = owl_global_get_current_view(&g);
+  m = owl_view_get_element(v, i);
+  g->markedmsgid = m ? owl_message_get_id(m) : 0;
+  */
 }
 
 /* windows */
@@ -599,12 +618,6 @@ owl_history *owl_global_get_cmd_history(owl_global *g) {
   return(&(g->cmdhist));
 }
 
-/* muxevents */
-
-owl_muxevents *owl_global_get_muxevents(owl_global *g) {
-  return(&(g->muxevents));
-}
-
 /* filterlist */
 
 owl_list *owl_global_get_filterlist(owl_global *g) {
@@ -747,26 +760,6 @@ void owl_global_set_newmsgproc_pid(owl_global *g, int i) {
 
 int owl_global_get_newmsgproc_pid(owl_global *g) {
   return(g->newmsgproc_pid);
-}
-
-void owl_global_add_to_malloced(owl_global *g, int i) {
-  g->malloced+=i;
-}
-
-void owl_global_add_to_freed(owl_global *g, int i) {
-  g->freed+=1;
-}
-
-int owl_global_get_malloced(owl_global *g) {
-  return(g->malloced);
-}
-
-int owl_global_get_freed(owl_global *g) {
-  return(g->freed);
-}
-
-int owl_global_get_meminuse(owl_global *g) {
-  return(g->malloced-g->freed);
 }
 
 /* AIM stuff */
@@ -1007,4 +1000,16 @@ void owl_global_next_fmtext_seq(owl_global *g)
 GList **owl_global_get_timerlist(owl_global *g)
 {
   return &(g->timerlist);
+}
+
+int owl_global_is_interrupted(owl_global *g) {
+  return g->interrupted;
+}
+
+void owl_global_set_interrupted(owl_global *g) {
+  g->interrupted = 1;
+}
+
+void owl_global_unset_interrupted(owl_global *g) {
+  g->interrupted = 0;
 }

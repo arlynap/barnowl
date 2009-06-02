@@ -1031,6 +1031,12 @@ sub replysendercmd   { return shift->{replysendercmd}};
 sub pretty_sender    { return shift->sender; }
 sub pretty_recipient { return shift->recipient; }
 
+# Override if you want a context (instance, network, etc.) on personals
+sub personal_context { return ""; }
+# extra short version, for use where space is especially tight
+# (eg, the oneline style)
+sub short_personal_context { return ""; }
+
 sub delete {
     my $self = shift;
     $self->set_meta(deleted => 1);
@@ -1231,7 +1237,6 @@ sub is_ping     { return (lc(shift->opcode) eq "ping"); }
 sub is_personal {
     my ($m) = @_;
     return ((lc($m->class) eq "message")
-	    && (lc($m->instance) eq "personal")
 	    && $m->is_private);
 }
 
@@ -1248,6 +1253,44 @@ sub pretty_sender {
 sub pretty_recipient {
     my ($m) = @_;
     return strip_realm($m->recipient);
+}
+
+# Portion of the reply command that preserves the context
+sub context_reply_cmd {
+    my $m = shift;
+    my $class = "";
+    if (lc($m->class) ne "message") {
+        $class = "-c " . BarnOwl::quote($m->class);
+    }
+    my $instance = "";
+    if (lc($m->instance) ne "personal") {
+        $instance = "-i " . BarnOwl::quote($m->instance);
+    }
+    if (($class eq "") or  ($instance eq "")) {
+        return $class . $instance;
+    } else {
+        return $class . " " . $instance;
+    }
+}
+
+sub personal_context {
+    my ($m) = @_;
+    return $m->context_reply_cmd();
+}
+
+sub short_personal_context {
+    my ($m) = @_;
+    if(lc($m->class) eq 'message')
+    {
+        if(lc($m->instance) eq 'personal')
+        {
+            return '';
+        } else {
+            return $m->instance;
+        }
+    } else {
+        return $m->class;
+    }
 }
 
 # These are arguably zephyr-specific
@@ -1279,14 +1322,22 @@ sub replycmd {
 
     if($sender && $self->opcode eq WEBZEPHYR_OPCODE) {
         $class = WEBZEPHYR_CLASS;
-        $instance = $self->sender;
+        $instance = $self->pretty_sender;
+        $instance =~ s/-webzephyr$//;
         $to = WEBZEPHYR_PRINCIPAL;
     } elsif($self->class eq WEBZEPHYR_CLASS
             && $self->is_loginout) {
         $class = WEBZEPHYR_CLASS;
         $instance = $self->instance;
         $to = WEBZEPHYR_PRINCIPAL;
-    } elsif($self->is_loginout || $sender) {
+    } elsif($self->is_loginout) {
+        $class = 'MESSAGE';
+        $instance = 'PERSONAL';
+        $to = $self->sender;
+    } elsif($sender && !$self->is_private) {
+        # Possible future feature: (Optionally?) include the class and/or
+        # instance of the message being replied to in the instance of the 
+        # outgoing personal reply
         $class = 'MESSAGE';
         $instance = 'PERSONAL';
         $to = $self->sender;
@@ -1309,12 +1360,8 @@ sub replycmd {
         $cmd = 'zwrite';
     }
 
-    if (lc $class ne 'message') {
-        $cmd .= " -c " . BarnOwl::quote($self->class);
-    }
-    if (lc $instance ne 'personal') {
-        $cmd .= " -i " . BarnOwl::quote($self->instance);
-    }
+    my $context_part = $self->context_reply_cmd();
+    $cmd .= " " . $context_part unless ($context_part eq '');
     if ($to ne '') {
         $to = strip_realm($to);
         if (defined $cc) {
@@ -1442,8 +1489,13 @@ Called before BarnOwl shutdown
 
 =item $receiveMessage
 
-Called with a C<BarnOwl::Message> object every time BarnOwl appends a
-new message to its message list
+Called with a C<BarnOwl::Message> object every time BarnOwl receives a
+new incoming message.
+
+=item $newMessage
+
+Called with a C<BarnOwl::Message> object every time BarnOwl appends
+I<any> new message to the message list.
 
 =item $mainLoop
 
@@ -1664,7 +1716,9 @@ sub format_login {
 sub format_ping {
     my $self = shift;
     my $m = shift;
-    return "\@b(PING) from \@b(" . $m->pretty_sender . ")";
+    my $personal_context = $m->personal_context;
+    $personal_context = ' [' . $personal_context . ']' if $personal_context;
+    return "\@b(PING)" . $personal_context . " from \@b(" . $m->pretty_sender . ")";
 }
 
 sub format_admin {
@@ -1685,10 +1739,13 @@ sub chat_header {
     my $m = shift;
     my $header;
     if ( $m->is_personal ) {
+        my $personal_context = $m->personal_context;
+        $personal_context = ' [' . $personal_context . ']' if $personal_context;
+
         if ( $m->direction eq "out" ) {
-            $header = ucfirst $m->type . " sent to " . $m->pretty_recipient;
+            $header = ucfirst $m->type . $personal_context . " sent to " . $m->pretty_recipient;
         } else {
-            $header = ucfirst $m->type . " from " . $m->pretty_sender;
+            $header = ucfirst $m->type . $personal_context . " from " . $m->pretty_sender;
         }
     } else {
         $header = $m->context;
@@ -1711,7 +1768,11 @@ sub format_sender {
     my $m = shift;
     my $sender = $m->long_sender;
     $sender =~ s/\n.*$//s;
-    return "  (" . $sender . '@color[default]' . ")";
+    if (BarnOwl::getvar('colorztext') eq 'on') {
+      return "  (" . $sender . '@color[default]' . ")";
+    } else {
+      return "  ($sender)";
+    }
 }
 
 sub indent_body
@@ -1721,7 +1782,7 @@ sub indent_body
 
     my $body = $m->body;
     if ($m->{should_wordwrap}) {
-      $body = BarnOwl::wordwrap($body, BarnOwl::getnumcols()-8);
+      $body = BarnOwl::wordwrap($body, BarnOwl::getnumcols()-9);
     }
     # replace newline followed by anything with
     # newline plus four spaces and that thing.
@@ -1749,6 +1810,11 @@ sub description {"Formats for one-line-per-message"}
 BarnOwl::create_style("oneline", "BarnOwl::Style::OneLine");
 
 ################################################################################
+
+sub maybe {
+    my $thing = shift;
+    return defined($thing) ? $thing : "";
+}
 
 sub format_login {
   my $self = shift;
@@ -1788,10 +1854,12 @@ sub format_chat
 
   my $line;
   if ($m->is_personal) {
+
+    # Figure out what to show in the subcontext column
     $line= sprintf(BASE_FORMAT,
                    $dirsym,
                    $m->type,
-                   '',
+                   maybe($m->short_personal_context),
                    ($dir eq 'out'
                     ? $m->pretty_recipient
                     : $m->pretty_sender));
@@ -1799,8 +1867,8 @@ sub format_chat
   else {
     $line = sprintf(BASE_FORMAT,
                     $dirsym,
-                    $m->context,
-                    $m->subcontext,
+                    maybe($m->context),
+                    maybe($m->subcontext),
                     ($dir eq 'out'
                      ? $m->pretty_recipient
                      : $m->pretty_sender));

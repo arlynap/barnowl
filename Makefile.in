@@ -8,6 +8,7 @@ datarootdir = @datarootdir@
 datadir = @datadir@/barnowl
 bindir = @bindir@
 mandir = @mandir@
+transform = @program_transform_name@
 
 CC=@CC@
 LIBS=@LIBS@ -L./libfaim -lfaim
@@ -31,8 +32,8 @@ BASE_SRCS=list.c message.c mainwin.c popwin.c zephyr.c messagelist.c \
 OWL_SRC = owl.c
 TESTER_SRC = tester.c
 
-EXE = barnowl
-PERL_MODULES = Jabber
+EXE = barnowl.bin
+PERL_MODULES = Jabber IRC WordWrap
 MODULE_DIRS = $(PERL_MODULES:%=perl/modules/%)
 
 BASE_OBJS = $(BASE_SRCS:.c=.o)
@@ -73,19 +74,19 @@ clean: libfaimclean modules_clean
 distclean: clean libfaimdistclean
 	$(RM) config.cache config.log config.status  Makefile config.h TAGS *~ core
 
-.PHONY: $(MODULE_DIRS)
+.PHONY: $(MODULE_DIRS) $(MODULE_DIRS:%=clean_%)
 
 modules: $(MODULE_DIRS)
-modules_clean:
-	for i in $(MODULE_DIRS); do \
-		cd $$i; test ! -f Makefile || make clean; \
-	done
+modules_clean: $(MODULE_DIRS:%=clean_%)
 
 $(MODULE_DIRS): %: %/Makefile
-	( cd $@ && make $(notdir $@).par )
+	( cd $@ && $(MAKE) $(notdir $@).par )
 
 $(MODULE_DIRS:=/Makefile): %/Makefile: %/Makefile.PL
 	( cd $(dir $@) && perl -I../../lib Makefile.PL )
+
+$(MODULE_DIRS:%=clean_%): clean_%:
+	(cd $* && (test ! -f Makefile || $(MAKE) clean))
 
 proto: owl_prototypes.h
 
@@ -119,26 +120,30 @@ $(BASE_OBJS) varstubs.h: owl.h config.h owl_prototypes.h
 libfaim: libfaim/libfaim.a
 
 libfaim/libfaim.a:
-	(cd libfaim; $(MAKE))
+	(cd libfaim && $(MAKE))
 
 libfaimclean:
-	(cd libfaim; $(MAKE) clean)
+	(cd libfaim && $(MAKE) clean)
 
 libfaimdistclean:
-	(cd libfaim; $(MAKE) distclean)
+	(cd libfaim && $(MAKE) distclean)
 
-install: all installdirs
-	${INSTALL_PROGRAM} $(EXE) ${DESTDIR}${bindir}/$(EXE)
+install: all installdirs $(PERL_MODULES:%=module_install_%)
+	${INSTALL_PROGRAM} $(EXE) ${DESTDIR}${bindir}/`echo barnowl|sed '$(transform)'`
 	${INSTALL_DATA} doc/barnowl.1 ${DESTDIR}${mandir}/man1/barnowl.1
-	${INSTALL} -d ${DESTDIR}${datadir}/lib
-	${INSTALL} -d ${DESTDIR}${datadir}/modules
-	tar -C perl/lib --exclude .svn -cf - . | tar -C ${DESTDIR}${datadir}/lib -xf -
-	for i in $(PERL_MODULES); do \
-		${INSTALL_DATA} perl/modules/$$i/$$i.par ${DESTDIR}${datadir}/modules/$$i.par; \
-	done
+	(cd perl/lib && tar --exclude .svn -cf - . ) | (cd ${DESTDIR}${datadir}/lib && tar -xf - )
 
 installdirs: mkinstalldirs
-	${srcdir}/mkinstalldirs ${DESTDIR}${bindir} ${DESTDIR}${mandir}/man1 ${DESTDIR}${datadir}
+	${srcdir}/mkinstalldirs \
+	    ${DESTDIR}${bindir} \
+	    ${DESTDIR}${mandir}/man1 \
+	    ${DESTDIR}${datadir}/lib \
+	    ${DESTDIR}${datadir}/modules
+
+.PHONY: $(PERL_MODULES:%=module_install_%)
+
+$(PERL_MODULES:%=module_install_%): module_install_%: installdirs
+	${INSTALL_DATA} perl/modules/$*/$*.par ${DESTDIR}${datadir}/modules/$*.par
 
 # For emacs flymake-mode
 check-syntax: proto

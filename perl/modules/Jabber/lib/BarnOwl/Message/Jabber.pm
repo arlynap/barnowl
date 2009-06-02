@@ -51,6 +51,15 @@ sub subcontext {
     return shift->subject || "";
 }
 
+sub personal_context {
+    my $self = shift;
+    if ($self->is_incoming) {
+        return "to " . $self->to;
+    } else {
+        return "from " . $self->from;
+    }
+}
+
 sub smartfilter {
     my $self = shift;
     my $inst = shift;

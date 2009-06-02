@@ -145,7 +145,7 @@ char * owl_perlconfig_message_call_method(owl_message *m, char *method, int argc
 }
 
 
-char *owl_perlconfig_initperl(char * file)
+char *owl_perlconfig_initperl(char * file, int *Pargc, char ***Pargv, char *** Penv)
 {
   int ret;
   PerlInterpreter *p;
@@ -153,6 +153,7 @@ char *owl_perlconfig_initperl(char * file)
   char *args[] = {"", "-e", "0;", NULL};
 
   /* create and initialize interpreter */
+  PERL_SYS_INIT3(Pargc, Pargv, Penv);
   p=perl_alloc();
   owl_global_set_perlinterp(&g, (void*)p);
   perl_construct(p);
@@ -321,7 +322,7 @@ void owl_perlconfig_cmd_free(owl_cmd *cmd)
 
 void owl_perlconfig_dispatch_free(owl_dispatch *d)
 {
-  SvREFCNT_dec(d->data);
+  SvREFCNT_dec((SV*)d->data);
   owl_free(d);
 }
 

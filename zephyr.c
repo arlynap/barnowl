@@ -8,53 +8,40 @@
 
 static const char fileIdent[] = "$Id$";
 
+static GList *deferred_subs = NULL;
+
 #ifdef HAVE_LIBZEPHYR
+typedef struct _owl_sub_list {                            /* noproto */
+  ZSubscription_t *subs;
+  int nsubs;
+} owl_sub_list;
+
 Code_t ZResetAuthentication();
 #endif
 
-int owl_zephyr_initialize()
-{
-#ifdef HAVE_LIBZEPHYR
-  int ret;
-  ZNotice_t notice;
-
-  /* Stat the zhm manually, with a shorter timeout */
-  if ((ret = ZOpenPort(NULL)) != ZERR_NONE)
-    return(ret);
-
-  if ((ret = owl_zhm_stat(&notice)) != ZERR_NONE)
-    return(ret);
-
-  ZClosePort();
-
-  if ((ret = ZInitialize()) != ZERR_NONE) {
-    com_err("owl",ret,"while initializing");
-    return(1);
-  }
-  if ((ret = ZOpenPort(NULL)) != ZERR_NONE) {
-    com_err("owl",ret,"while opening port");
-    return(1);
-  }
-#endif
-  return(0);
-}
-
-#ifdef HAVE_LIBZEPHYR
 #define HM_SVC_FALLBACK		htons((unsigned short) 2104)
 
-/*
- * Code modified from libzephyr's ZhmStat.c
- *
- * Modified to only wait one second to time out if there is no
- * hostmanager present, rather than a rather excessive 10 seconds.
- */
-Code_t owl_zhm_stat(ZNotice_t *notice) {
+#ifdef HAVE_LIBZEPHYR
+void owl_zephyr_initialize()
+{
+  int ret;
   struct servent *sp;
   struct sockaddr_in sin;
   ZNotice_t req;
   Code_t code;
-  struct timeval tv;
-  fd_set readers;
+  owl_dispatch *dispatch;
+
+  /*
+   * Code modified from libzephyr's ZhmStat.c
+   *
+   * Modified to add the fd to our select loop, rather than hanging
+   * until we get an ack.
+   */
+
+  if ((ret = ZOpenPort(NULL)) != ZERR_NONE) {
+    owl_function_error("Error opening Zephyr port: %s", error_message(ret));
+    return;
+  }
 
   (void) memset((char *)&sin, 0, sizeof(struct sockaddr_in));
 
@@ -75,28 +62,99 @@ Code_t owl_zhm_stat(ZNotice_t *notice) {
   req.z_recipient = "";
   req.z_default_format = "";
   req.z_message_len = 0;
-	
-  if ((code = ZSetDestAddr(&sin)) != ZERR_NONE)
-    return(code);
 
-  if ((code = ZSendNotice(&req, ZNOAUTH)) != ZERR_NONE)
-    return(code);
+  if ((code = ZSetDestAddr(&sin)) != ZERR_NONE) {
+    owl_function_error("Initializing Zephyr: %s", error_message(code));
+    return;
+  }
 
-  /* Wait up to 1 second for a response. */
-  FD_ZERO(&readers);
-  FD_SET(ZGetFD(), &readers);
-  tv.tv_sec = 1;
-  tv.tv_usec = 0;
-  code = select(ZGetFD() + 1, &readers, NULL, NULL, &tv);
-  if (code < 0 && errno != EINTR)
-    return(errno);
-  if (code == 0 || (code < 0 && errno == EINTR) || ZPending() == 0)
-    return(ZERR_HMDEAD);
+  if ((code = ZSendNotice(&req, ZNOAUTH)) != ZERR_NONE) {
+    owl_function_error("Initializing Zephyr: %s", error_message(code));
+    return;
+  }
 
-  return(ZReceiveNotice(notice, (struct sockaddr_in *) 0));
+  dispatch = owl_malloc(sizeof(*dispatch));
+  dispatch->fd = ZGetFD();
+  dispatch->cfunc = owl_zephyr_finish_initialization;
+  dispatch->destroy = (void(*)(owl_dispatch*))owl_free;
+
+  owl_select_add_dispatch(dispatch);
 }
 
+void owl_zephyr_finish_initialization(owl_dispatch *d) {
+  Code_t code;
+
+  owl_select_remove_dispatch(d->fd);
+
+  ZClosePort();
+
+  if ((code = ZInitialize()) != ZERR_NONE) {
+    owl_function_error("Initializing Zephyr: %s", error_message(code));
+    return;
+  }
+
+  if ((code = ZOpenPort(NULL)) != ZERR_NONE) {
+    owl_function_error("Initializing Zephyr: %s", error_message(code));
+    return;
+  }
+
+  d = owl_malloc(sizeof(owl_dispatch));
+  d->fd = ZGetFD();
+  d->cfunc = &owl_zephyr_process_events;
+  d->destroy = NULL;
+  owl_select_add_dispatch(d);
+  owl_global_set_havezephyr(&g);
+
+  if(g.load_initial_subs) {
+    owl_zephyr_load_initial_subs();
+  }
+  while(deferred_subs != NULL) {
+    owl_sub_list *subs = deferred_subs->data;
+    owl_function_debugmsg("Loading %d deferred subs.", subs->nsubs);
+    owl_zephyr_loadsubs_helper(subs->subs, subs->nsubs);
+    deferred_subs = g_list_delete_link(deferred_subs, deferred_subs);
+    owl_free(subs);
+  }
+
+  /* zlog in if we need to */
+  if (owl_global_is_startuplogin(&g)) {
+    owl_function_debugmsg("startup: doing zlog in");
+    owl_zephyr_zlog_in();
+  }
+}
+
+void owl_zephyr_load_initial_subs() {
+  int ret_sd, ret_bd, ret_u;
+
+  owl_function_debugmsg("startup: loading initial zephyr subs");
+
+  /* load default subscriptions */
+  ret_sd = owl_zephyr_loaddefaultsubs();
+
+  /* load Barnowl default subscriptions */
+  ret_bd = owl_zephyr_loadbarnowldefaultsubs();
+
+  /* load subscriptions from subs file */
+  ret_u = owl_zephyr_loadsubs(NULL, 0);
+
+  if (ret_sd || ret_bd || ret_u) {
+    owl_function_error("Error loading zephyr subscriptions");
+  } else if (ret_u!=-1) {
+    owl_global_add_userclue(&g, OWL_USERCLUE_CLASSES);
+  }
+
+  /* load login subscriptions */
+  if (owl_global_is_loginsubs(&g)) {
+    owl_function_debugmsg("startup: loading login subs");
+    owl_function_loadloginsubs(NULL);
+  }
+}
+#else
+void owl_zephyr_initialize()
+{
+}
 #endif
+
 
 int owl_zephyr_shutdown()
 {
@@ -142,25 +200,35 @@ char *owl_zephyr_get_sender()
 #ifdef HAVE_LIBZEPHYR
 int owl_zephyr_loadsubs_helper(ZSubscription_t subs[], int count)
 {
-  int i, ret = 0;
-  /* sub without defaults */
-  if (ZSubscribeToSansDefaults(subs,count,0) != ZERR_NONE) {
-    owl_function_error("Error subscribing to zephyr notifications.");
-    ret=-2;
-  }
+  int ret = 0;
+  if (owl_global_is_havezephyr(&g)) {
+    int i;
+    /* sub without defaults */
+    if (ZSubscribeToSansDefaults(subs,count,0) != ZERR_NONE) {
+      owl_function_error("Error subscribing to zephyr notifications.");
+      ret=-2;
+    }
 
-  /* free stuff */
-  for (i=0; i<count; i++) {
-    owl_free(subs[i].zsub_class);
-    owl_free(subs[i].zsub_classinst);
-    owl_free(subs[i].zsub_recipient);
+    /* free stuff */
+    for (i=0; i<count; i++) {
+      owl_free(subs[i].zsub_class);
+      owl_free(subs[i].zsub_classinst);
+      owl_free(subs[i].zsub_recipient);
+    }
+
+    owl_free(subs);
+  } else {
+    owl_sub_list *s = owl_malloc(sizeof(owl_sub_list));
+    s->subs = subs;
+    s->nsubs = count;
+    deferred_subs = g_list_append(deferred_subs, s);
   }
 
   return ret;
 }
 #endif
 
-/* Load zephyr subscriptions form 'filename'.  If 'filename' is NULL,
+/* Load zephyr subscriptions from 'filename'.  If 'filename' is NULL,
  * the default file $HOME/.zephyr.subs will be used.
  *
  * Returns 0 on success.  If the file does not exist, return -1 if
@@ -206,21 +274,8 @@ int owl_zephyr_loadsubs(char *filename, int error_on_nofile)
     }
     
     if (count >= subSize) {
-      ZSubscription_t* newsubs;
-      newsubs = owl_realloc(subs, sizeof(ZSubscription_t) * subSize * 2);
-      if (NULL == newsubs) {
-	/* If realloc fails, load what we've got, clear, and continue */
-	ret = owl_zephyr_loadsubs_helper(subs, count);
-	if (ret != 0) {
-	  fclose(file);
-	  return(ret);
-	}
-	count=0;
-      }
-      else {
-	subs = newsubs;
-	subSize *= 2;
-      }
+      subSize *= 2;
+      subs = owl_realloc(subs, sizeof(ZSubscription_t) * subSize);
     }
     
     /* add it to the list of subs */
@@ -245,8 +300,36 @@ int owl_zephyr_loadsubs(char *filename, int error_on_nofile)
   }
   fclose(file);
 
-  ret=owl_zephyr_loadsubs_helper(subs, count);
-  owl_free(subs);
+  ret = owl_zephyr_loadsubs_helper(subs, count);
+  return(ret);
+#else
+  return(0);
+#endif
+}
+
+/* Load default Barnowl subscriptions
+ *
+ * Returns 0 on success.
+ * Return -2 if there is a failure from zephyr to load the subscriptions.
+ */
+int owl_zephyr_loadbarnowldefaultsubs()
+{
+#ifdef HAVE_LIBZEPHYR
+  ZSubscription_t *subs;
+  int subSize = 10; /* Max Barnowl default subs we allow */
+  int count, ret;
+
+  subs = owl_malloc(sizeof(ZSubscription_t) * subSize);
+  ret = 0;
+  ZResetAuthentication();
+  count=0;
+
+  subs[count].zsub_class=owl_strdup("message");
+  subs[count].zsub_classinst=owl_strdup("*");
+  subs[count].zsub_recipient=owl_strdup("%me%");
+  count++;
+
+  ret = owl_zephyr_loadsubs_helper(subs, count);
   return(ret);
 #else
   return(0);
@@ -272,10 +355,13 @@ int owl_zephyr_loadloginsubs(char *filename)
 {
 #ifdef HAVE_LIBZEPHYR
   FILE *file;
-  ZSubscription_t subs[3001];
+  ZSubscription_t *subs;
+  int numSubs = 100;
   char subsfile[1024], buffer[1024];
-  int count, ret, i;
+  int count, ret;
   struct stat statbuff;
+
+  subs = owl_malloc(numSubs * sizeof(ZSubscription_t));
 
   if (filename==NULL) {
     sprintf(subsfile, "%s/%s", owl_global_get_homedir(&g), ".anyone");
@@ -289,22 +375,24 @@ int owl_zephyr_loadloginsubs(char *filename)
   ret=0;
 
   ZResetAuthentication();
-  /* need to redo this to do chunks, not just bag out after 3000 */
   count=0;
   file=fopen(subsfile, "r");
   if (file) {
     while ( fgets(buffer, 1024, file)!=NULL ) {
       if (buffer[0]=='#' || buffer[0]=='\n' || buffer[0]=='\n') continue;
       
-      if (count >= 3000) break; /* also tell the user */
+      if (count == numSubs) {
+        numSubs *= 2;
+        subs = owl_realloc(subs, numSubs * sizeof(ZSubscription_t));
+      }
 
       buffer[strlen(buffer)-1]='\0';
-      subs[count].zsub_class="login";
-      subs[count].zsub_recipient="*";
+      subs[count].zsub_class=owl_strdup("login");
+      subs[count].zsub_recipient=owl_strdup("*");
       if (strchr(buffer, '@')) {
-	subs[count].zsub_classinst=owl_strdup(buffer);
+        subs[count].zsub_classinst=owl_strdup(buffer);
       } else {
-	subs[count].zsub_classinst=owl_sprintf("%s@%s", buffer, ZGetRealm());
+        subs[count].zsub_classinst=owl_sprintf("%s@%s", buffer, ZGetRealm());
       }
 
       count++;
@@ -315,17 +403,7 @@ int owl_zephyr_loadloginsubs(char *filename)
     ret=-1;
   }
 
-  /* sub with defaults */
-  if (ZSubscribeToSansDefaults(subs,count,0) != ZERR_NONE) {
-    owl_function_error("Error subscribing to zephyr notifications.");
-    ret=-2;
-  }
-
-  /* free stuff */
-  for (i=0; i<count; i++) {
-    owl_free(subs[i].zsub_classinst);
-  }
-
+  ret = owl_zephyr_loadsubs_helper(subs, count);
   return(ret);
 #else
   return(0);
@@ -515,7 +593,8 @@ char *owl_zephyr_get_message(ZNotice_t *n, owl_message *m)
     }
   }
   /* deal with MIT Discuss messages */
-  else if (!strcasecmp(n->z_default_format, "New transaction [$1] entered in $2\nFrom: $3 ($5)\nSubject: $4")) {
+  else if (!strcasecmp(n->z_default_format, "New transaction [$1] entered in $2\nFrom: $3 ($5)\nSubject: $4") ||
+           !strcasecmp(n->z_default_format, "New transaction [$1] entered in $2\nFrom: $3\nSubject: $4")) {
     char *msg, *field1, *field2, *field3, *field4, *field5;
     
     field1 = owl_zephyr_get_field(n, 1);
@@ -600,16 +679,15 @@ int send_zephyr(char *opcode, char *zsig, char *class, char *instance, char *rec
   notice.z_port=0;
   notice.z_class=class;
   notice.z_class_inst=instance;
+  notice.z_sender=NULL;
   if (!strcmp(recipient, "*") || !strcmp(recipient, "@")) {
     notice.z_recipient="";
+    if (*owl_global_get_zsender(&g))
+        notice.z_sender=owl_global_get_zsender(&g);
   } else {
     notice.z_recipient=recipient;
   }
   notice.z_default_format="Class $class, Instance $instance:\nTo: @bold($recipient) at $time $date\nFrom: @bold{$1 <$sender>}\n\n$2";
-  if (*owl_global_get_zsender(&g))
-      notice.z_sender=owl_global_get_zsender(&g);
-  else
-      notice.z_sender=NULL;
   if (opcode) notice.z_opcode=opcode;
 
   notice.z_message_len=strlen(zsig)+1+strlen(message);
@@ -640,10 +718,10 @@ Code_t send_zephyr_helper(ZNotice_t *notice, char *buf, int len, int wait)
 }
 #endif
 
-void send_ping(char *to)
+void send_ping(char *to, char *zclass, char *zinstance)
 {
 #ifdef HAVE_LIBZEPHYR
-  send_zephyr("PING", "", "MESSAGE", "PERSONAL", to, "");
+  send_zephyr("PING", "", zclass, zinstance, to, "");
 #endif
 }
 
@@ -662,13 +740,23 @@ void owl_zephyr_handle_ack(ZNotice_t *retnotice)
   } else if (!strcmp(retnotice->z_message, ZSRVACK_SENT)) {
     if (!strcasecmp(retnotice->z_opcode, "ping")) {
       return;
-    } else if (!strcasecmp(retnotice->z_class, "message") &&
-	       !strcasecmp(retnotice->z_class_inst, "personal")) {
-      tmp=short_zuser(retnotice->z_recipient);
-      owl_function_makemsg("Message sent to %s.", tmp);
-      free(tmp);
     } else {
-      owl_function_makemsg("Message sent to -c %s -i %s\n", retnotice->z_class, retnotice->z_class_inst);
+      if (strcasecmp(retnotice->z_recipient, ""))
+      { /* personal */
+        tmp=short_zuser(retnotice->z_recipient);
+        if(!strcasecmp(retnotice->z_class, "message") &&
+           !strcasecmp(retnotice->z_class_inst, "personal")) {
+          owl_function_makemsg("Message sent to %s.", tmp);
+        } else if(!strcasecmp(retnotice->z_class, "message")) { /* instanced, but not classed, personal */
+          owl_function_makemsg("Message sent to %s on -i %s\n", tmp, retnotice->z_class_inst);
+        } else { /* classed personal */
+          owl_function_makemsg("Message sent to %s on -c %s -i %s\n", tmp, retnotice->z_class, retnotice->z_class_inst);
+        }
+        free(tmp);
+      } else {
+        /* class / instance message */
+          owl_function_makemsg("Message sent to -c %s -i %s\n", retnotice->z_class, retnotice->z_class_inst);
+      }
     }
   } else if (!strcmp(retnotice->z_message, ZSRVACK_NOTSENT)) {
     #define BUFFLEN 1024
@@ -683,12 +771,23 @@ void owl_zephyr_handle_ack(ZNotice_t *retnotice)
       char buff[BUFFLEN];
       tmp = short_zuser(retnotice->z_recipient);
       owl_function_error("%s: Not logged in or subscribing.", tmp);
-      if(strcmp(retnotice->z_class, "message")) {
+      /*
+       * These error messages are often over 80 chars, but users who want to
+       * see the whole thing can scroll to the side, and for those with wide
+       * terminals or who don't care, not splitting saves a line in the UI
+       */
+      if(strcasecmp(retnotice->z_class, "message")) {
         snprintf(buff, BUFFLEN,
                  "Could not send message to %s: "
-                 "not logged in or subscribing to class %s, instance %s.\n", 
+                 "not logged in or subscribing to class %s, instance %s.\n",
                  tmp,
                  retnotice->z_class,
+                 retnotice->z_class_inst);
+      } else if(strcasecmp(retnotice->z_class_inst, "personal")) {
+        snprintf(buff, BUFFLEN,
+                 "Could not send message to %s: "
+                 "not logged in or subscribing to instance %s.\n",
+                 tmp,
                  retnotice->z_class_inst);
       } else {
         snprintf(buff, BUFFLEN,

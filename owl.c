@@ -1,4 +1,4 @@
-/*  Copyright (c) 2006-2008 The BarnOwl Developers. All rights reserved.
+/*  Copyright (c) 2006-2009 The BarnOwl Developers. All rights reserved.
  *  Copyright (c) 2004 James Kretchmar. All rights reserved.
  *
  *  This program is free software. You can redistribute it and/or
@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <locale.h>
 #include "owl.h"
+
 
 #if OWL_STDERR_REDIR
 #ifdef HAVE_SYS_IOCTL_H
@@ -41,10 +42,10 @@ int main(int argc, char **argv, char **env)
   WINDOW *recwin, *sepwin, *typwin, *msgwin;
   owl_editwin *tw;
   owl_popwin *pw;
-  int ret, initialsubs, debug, argcsave, followlast;
+  int debug, argcsave, followlast;
   int newmsgs, nexttimediff;
   struct sigaction sigact;
-  char *configfile, *tty, *perlout, *perlerr, **argvsave, buff[LINE], startupmsg[LINE];
+  char *configfile, *tty, *perlout, *perlerr, **argvsave;
   char *confdir;
   owl_filter *f;
   owl_style *s;
@@ -63,7 +64,7 @@ int main(int argc, char **argv, char **env)
   confdir = NULL;
   tty=NULL;
   debug=0;
-  initialsubs=1;
+  g.load_initial_subs = 1;
 
   setlocale(LC_ALL, "");
   
@@ -73,7 +74,7 @@ int main(int argc, char **argv, char **env)
   }
   while (argc>0) {
     if (!strcmp(argv[0], "-n")) {
-      initialsubs=0;
+      g.load_initial_subs = 0;
       argv++;
       argc--;
     } else if (!strcmp(argv[0], "-c")) {
@@ -135,12 +136,16 @@ int main(int argc, char **argv, char **env)
   sigaction(SIGTERM, &sigact, NULL);
   sigaction(SIGHUP, &sigact, NULL);
 
+  sigact.sa_sigaction=sigint_handler;
+  sigaction(SIGINT, &sigact, NULL);
+
   /* save initial terminal settings */
   tcgetattr(0, owl_global_get_startup_tio(&g));
 
   /* turn ISTRIP off */
   tcgetattr(0, &tio);
   tio.c_iflag &= ~ISTRIP;
+  tio.c_cc[VQUIT] = 0;
   tcsetattr(0, TCSAFLUSH, &tio);
 
   /* screen init */
@@ -154,7 +159,7 @@ int main(int argc, char **argv, char **env)
 #ifdef HAVE_USE_DEFAULT_COLORS
   use_default_colors();
 #endif
-  raw();
+  cbreak();
   noecho();
 
   /* define simple color pairs */
@@ -189,20 +194,8 @@ int main(int argc, char **argv, char **env)
     d->destroy = NULL;
     owl_select_add_dispatch(d);
   }
-  
-#ifdef HAVE_LIBZEPHYR
-  /* zephyr init */
-  ret=owl_zephyr_initialize();
-  if (!ret) {
-    owl_dispatch *d = owl_malloc(sizeof(owl_dispatch));
-    d->fd = ZGetFD();
-    d->cfunc = &owl_zephyr_process_events;
-    d->destroy = NULL;
-    owl_select_add_dispatch(d);
-    owl_global_set_havezephyr(&g);
-  }
 
-#endif
+  owl_zephyr_initialize();
 
 #if OWL_STDERR_REDIR
   /* Do this only after we've started curses up... */
@@ -232,10 +225,9 @@ int main(int argc, char **argv, char **env)
   /* Initialize perl */
   owl_function_debugmsg("startup: processing config file");
   owl_context_set_readconfig(owl_global_get_context(&g));
-  perlerr=owl_perlconfig_initperl(configfile);
+  perlerr=owl_perlconfig_initperl(configfile, &argc, &argv, &env);
   if (perlerr) {
     endwin();
-    owl_function_error("Internal perl error: %s\n", perlerr);
     fprintf(stderr, "Internal perl error: %s\n", perlerr);
     fflush(stderr);
     printf("Internal perl error: %s\n", perlerr);
@@ -324,17 +316,17 @@ int main(int argc, char **argv, char **env)
   /* welcome message */
   if(owl_messagelist_get_size(owl_global_get_msglist(&g)) == 0) {
     owl_function_debugmsg("startup: creating splash message");
-    strcpy(startupmsg, "-----------------------------------------------------------------------\n");
-    sprintf(buff,      "Welcome to barnowl version %s.  Press 'h' for on-line help.            \n", OWL_VERSION_STRING);
-    strcat(startupmsg, buff);
-    strcat(startupmsg, "To see a quick introduction, type ':show quickstart'.                  \n");
-    strcat(startupmsg, "                                                                       \n");
-    strcat(startupmsg, "BarnOwl is free software. Type ':show license' for more                \n");
-    strcat(startupmsg, "information.                                                     ^ ^   \n");
-    strcat(startupmsg, "                                                                 OvO   \n");
-    strcat(startupmsg, "Please report any bugs or suggestions to bug-barnowl@mit.edu    (   )  \n");
-    strcat(startupmsg, "-----------------------------------------------------------------m-m---\n");
-    owl_function_adminmsg("", startupmsg);
+    owl_function_adminmsg("",
+                          "-----------------------------------------------------------------------\n"
+                          "Welcome to barnowl version " OWL_VERSION_STRING ".  Press 'h' for on-line help.\n"
+                          "To see a quick introduction, type ':show quickstart'.                  \n"
+                          "                                                                       \n"
+                          "BarnOwl is free software. Type ':show license' for more                \n"
+                          "information.                                                     ^ ^   \n"
+                          "                                                                 OvO   \n"
+                          "Please report any bugs or suggestions to bug-barnowl@mit.edu    (   )  \n"
+                          "-----------------------------------------------------------------m-m---\n"
+                          );
   }
   sepbar(NULL);
 
@@ -343,30 +335,6 @@ int main(int argc, char **argv, char **env)
   owl_function_source(NULL);
 
   wrefresh(sepwin);
-
-  /* load zephyr subs */
-  if (initialsubs) {
-    int ret2;
-    owl_function_debugmsg("startup: loading initial zephyr subs");
-
-    /* load default subscriptions */
-    ret=owl_zephyr_loaddefaultsubs();
-    
-    /* load subscriptions from subs file */
-    ret2=owl_zephyr_loadsubs(NULL, 0);
-
-    if (ret || ret2) {
-      owl_function_adminmsg("", "Error loading zephyr subscriptions");
-    } else if (ret2!=-1) {
-      owl_global_add_userclue(&g, OWL_USERCLUE_CLASSES);
-    }
-
-    /* load login subscriptions */
-    if (owl_global_is_loginsubs(&g)) {
-      owl_function_debugmsg("startup: loading login subs");
-      owl_function_loadloginsubs(NULL);
-    }
-  }
 
   /* First buddy check to sync the list without notifications */
   owl_function_debugmsg("startup: doing initial zephyr buddy check");
@@ -379,12 +347,6 @@ int main(int argc, char **argv, char **env)
     /* the style was set by the user: leave it alone */
   } else {
     owl_global_set_default_style(&g, "default");
-  }
-
-  /* zlog in if we need to */
-  if (owl_global_is_startuplogin(&g)) {
-    owl_function_debugmsg("startup: doing zlog in");
-    owl_zephyr_zlog_in();
   }
 
   owl_function_debugmsg("startup: set style for the view: %s", owl_global_get_default_style(&g));
@@ -497,6 +459,11 @@ int main(int argc, char **argv, char **env)
       doupdate();
       owl_global_set_noneedrefresh(&g);
     }
+
+    /* Some calls into libzephyr call Z_WaitForNotice(), which has its
+     * own select loop and may leave zephyrs on the queue. Check for
+     * them now, and process any we find. */
+    owl_zephyr_process_events(NULL);
 
     /* select on FDs we know about. */
     owl_select();
@@ -613,20 +580,14 @@ int owl_process_message(owl_message *m) {
 
 void owl_process_input(owl_dispatch *d)
 {
-  int ret;
   owl_input j;
-  owl_popwin *pw;
-  owl_editwin *tw;
   WINDOW *typwin;
 
   typwin = owl_global_get_curs_typwin(&g);
+
   while (1) {
     j.ch = wgetch(typwin);
     if (j.ch == ERR) return;
-    
-    owl_global_set_lastinputtime(&g, time(NULL));
-    pw=owl_global_get_popwin(&g);
-    tw=owl_global_get_typwin(&g);
 
     j.uch = '\0';
     if (j.ch >= KEY_MIN && j.ch <= KEY_MAX) {
@@ -672,35 +633,8 @@ void owl_process_input(owl_dispatch *d)
     else if (j.ch <= 0x7f) {
       j.uch = j.ch;
     }
-    
-    owl_global_set_lastinputtime(&g, time(NULL));
-    /* find and activate the current keymap.
-     * TODO: this should really get fixed by activating
-     * keymaps as we switch between windows... 
-     */
-    if (pw && owl_popwin_is_active(pw) && owl_global_get_viewwin(&g)) {
-      owl_context_set_popless(owl_global_get_context(&g), 
-                              owl_global_get_viewwin(&g));
-      owl_function_activate_keymap("popless");
-    } else if (owl_global_is_typwin_active(&g) 
-               && owl_editwin_get_style(tw)==OWL_EDITWIN_STYLE_ONELINE) {
-      /*
-        owl_context_set_editline(owl_global_get_context(&g), tw);
-        owl_function_activate_keymap("editline");
-      */
-    } else if (owl_global_is_typwin_active(&g) 
-               && owl_editwin_get_style(tw)==OWL_EDITWIN_STYLE_MULTILINE) {
-      owl_context_set_editmulti(owl_global_get_context(&g), tw);
-      owl_function_activate_keymap("editmulti");
-    } else {
-      owl_context_set_recv(owl_global_get_context(&g));
-      owl_function_activate_keymap("recv");
-    }
-    /* now actually handle the keypress */
-    ret = owl_keyhandler_process(owl_global_get_keyhandler(&g), j);
-    if (ret!=0 && ret!=1) {
-      owl_function_makemsg("Unable to handle keypress");
-    }
+
+    owl_process_input_char(j);
   }
 }
 
@@ -718,6 +652,11 @@ void sig_handler(int sig, siginfo_t *si, void *data)
   } else if (sig==SIGTERM || sig==SIGHUP) {
     owl_function_quit();
   }
+}
+
+void sigint_handler(int sig, siginfo_t *si, void *data)
+{
+  owl_global_set_interrupted(&g);
 }
 
 void usage()
@@ -761,6 +700,8 @@ void stderr_redirect_handler(owl_dispatch *d)
   int navail, bread;
   char *buf;
   int rfd = d->fd;
+  char *err;
+
   if (rfd<0) return;
   if (-1 == ioctl(rfd, FIONREAD, (void*)&navail)) {
     return;
@@ -769,12 +710,16 @@ void stderr_redirect_handler(owl_dispatch *d)
   if (navail<=0) return;
   /* if (navail>256) { navail = 256; } */
   buf = owl_malloc(navail+1);
+
   bread = read(rfd, buf, navail);
   if (buf[navail-1] != '\0') {
     buf[navail] = '\0';
   }
-  owl_function_error("Err: %s", buf);
+
+  err = owl_sprintf("[stderr]\n%s", buf);
   owl_free(buf);
+
+  owl_function_log_err(err);
 }
 
 #endif /* OWL_STDERR_REDIR */

@@ -1,4 +1,4 @@
-/*  Copyright (c) 2006-2008 The BarnOwl Developers. All rights reserved.
+/*  Copyright (c) 2006-2009 The BarnOwl Developers. All rights reserved.
  *  Copyright (c) 2004 James Kretchmar. All rights reserved.
  *
  *  This program is free software. You can redistribute it and/or
@@ -51,7 +51,7 @@ static const char owl_h_fileIdent[] = "$Id$";
 #define _STRINGIFY(x) #x
 
 #ifndef OWL_VERSION_STRING
-#define OWL_VERSION_STRING "1.0.3"
+#define OWL_VERSION_STRING "1.1.2"
 #endif
 
 /* Feature that is being tested to redirect stderr through a pipe. 
@@ -360,7 +360,6 @@ typedef struct _owl_popwin {
   int cols;
   int active;
   int needsfirstrefresh;
-  void (*handler) (int ch);
 } owl_popwin;
 
 typedef SV owl_messagelist;
@@ -385,7 +384,6 @@ typedef struct _owl_filterelement {
 
 typedef struct _owl_filter {
   char *name;
-  int polarity;
   owl_filterelement * root;
   int fgcolor;
   int bgcolor;
@@ -439,18 +437,9 @@ typedef struct _owl_editwin {
   void *cbdata;
 } owl_editwin;
 
-typedef struct _owl_mux {
-  int handle;			/* for referencing this */
-  int active;			/* has this been deleted? */
-  int fd;		       
-  int eventmask;		/* bitmask of OWL_MUX_* */
-  void (*handler_fn)(int handle, int fd, int eventmask, void *data);
-  void *data;			/* data reference to pass to callback */
-} owl_mux;
-typedef owl_list owl_muxevents;
-
 typedef struct _owl_keybinding {
-  int  *j;			/* keypress stack (0-terminated) */  
+  int  *keys;			/* keypress stack */
+  int   len;                    /* length of stack */
   int   type;			/* command or function? */
   char *desc;			/* description (or "*user*") */
   char *command;		/* command, if of type command */
@@ -535,13 +524,13 @@ typedef struct _owl_global {
   owl_keyhandler kh;
   owl_list filterlist;
   owl_list puntlist;
-  owl_muxevents muxevents;	/* fds to dispatch on */
   owl_vardict vars;
   owl_cmddict cmds;
   owl_context ctx;
   owl_errqueue errqueue;
   int lines, cols;
   owl_view_iterator *curmsg, *topmsg;
+  int markedmsgid;              /* for finding the marked message when it has moved. */
   int curmsg_vert_offset;
   owl_view *current_view;
   owl_style *current_style;
@@ -603,6 +592,8 @@ typedef struct _owl_global {
   int fmtext_seq;          /* Used to invalidate message fmtext caches */
   GList *timerlist;
   owl_timer *aim_nop_timer;
+  int load_initial_subs;
+  int interrupted;
 } owl_global;
 
 /* globals */

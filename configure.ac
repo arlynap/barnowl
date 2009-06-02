@@ -11,9 +11,6 @@ if test "$GCC" = yes; then
      CFLAGS="$CFLAGS -Wall -g";
 fi
 
-m4_include(/usr/share/aclocal/pkg.m4)
-dnl m4_include(pkg.m4)
-
 dnl Check for Athena
 AC_MSG_CHECKING(for /usr/athena/include)
 if test -d /usr/athena/include; then
@@ -41,21 +38,31 @@ elif test -d /usr/local/include/kerberosIV; then
         CFLAGS=${CFLAGS}\ -I/usr/local/include/kerberosIV
         CPPFLAGS=${CPPFLAGS}\ -I/usr/local/include/kerberosIV
         AC_MSG_RESULT(yes)
+elif test -d /usr/include/openssl; then
+        CFLAGS=${CFLAGS}\ -I/usr/include/openssl
+        CPPFLAGS=${CPPFLAGS}\ -I/usr/include/openssl
+        AC_MSG_RESULT(OpenSSL DES found instead)
 else
         AC_MSG_RESULT(no)
 fi
+PROTECT_CFLAGS=${PROTECT_CFLAGS-"-fstack-protector"}
+SAVE_CFLAGS=$CFLAGS
+CFLAGS="$CFLAGS $PROTECT_CFLAGS"
+AC_MSG_CHECKING(whether protection cflags work)
+AC_COMPILE_IFELSE(int i;,
+    [AC_MSG_RESULT(yes)],
+    [AC_MSG_RESULT(no)
+    CFLAGS=$SAVE_CFLAGS])
 
-AC_CHECK_LIB(ncursesw, initscr,, AC_MSG_ERROR(No curses library found.))
+
+AC_CHECK_LIB(ssp, __stack_chk_guard)
+AC_CHECK_LIB(ncursesw, initscr,, AC_MSG_ERROR(No libncursesw found.))
 AC_CHECK_LIB(com_err, com_err)
 AC_CHECK_LIB(nsl, gethostbyname)
 AC_CHECK_LIB(socket, socket)
-AC_CHECK_LIB(k5crypto, krb5_derive_key)
 dnl AC_CHECK_LIB(des425, req_act_vno)
-AC_CHECK_LIB(des425, des_cbc_encrypt)
+AC_CHECK_LIB(des425, des_cbc_encrypt,,AC_CHECK_LIB(crypto,DES_cbc_encrypt))
 AC_CHECK_LIB(resolv, res_search)
-AC_CHECK_LIB(krb5, krb5_get_credentials)
-AC_CHECK_LIB(krb4, krb_sendauth,,
-   AC_CHECK_LIB(krb, krb_sendauth))
 dnl AC_CHECK_LIB(zephyr, ZGetSender,, AC_MSG_ERROR(No zephyr library found.))
 AC_CHECK_LIB(zephyr, ZGetSender)
 AC_CHECK_LIB(zephyr, ZInitLocationInfo, AC_DEFINE([HAVE_LIBZEPHYR_ZINITLOCATIONINFO], [], [Have ZInitLocationInfo]),)
@@ -66,6 +73,7 @@ AC_ARG_ENABLE([athstatic], AS_HELP_STRING([--enable-athstatic],
                                           [ATHSTATIC=])
 
 AC_CHECK_FUNCS(use_default_colors resizeterm des_string_to_key des_key_sched des_ecb_encrypt)
+AC_CHECK_FUNCS(				   DES_string_to_key  DES_ecb_encrypt DES_key_sched)
 
 AC_MSG_CHECKING(for des_ecb_encrypt prototype)
 AC_TRY_COMPILE([#include <des.h>
@@ -85,7 +93,7 @@ AC_CHECK_HEADERS(strings.h sys/ioctl.h sys/filio.h unistd.h com_err.h)
 
 dnl Add CFLAGS for embeded perl
 FOO=`perl -MExtUtils::Embed -e ccopts`
-echo Adding perl CFLAGS ${FOO}
+AC_MSG_NOTICE([Adding perl CFLAGS ${FOO}])
 CFLAGS=${CFLAGS}\ ${FOO}
 
 dnl Find the location of perl XSUBPP
@@ -105,19 +113,21 @@ fi
 
 dnl Add LDFLAGS for embedded perl
 FOO=`perl -MExtUtils::Embed -e ldopts`
-echo Adding perl LDFLAGS ${FOO}
+AC_MSG_NOTICE([Adding perl LDFLAGS ${FOO}])
 LDFLAGS=${LDFLAGS}\ ${FOO}
 
 dnl Add CFLAGS and LDFLAGS for glib-2.0
 PKG_CHECK_MODULES(GLIB,glib-2.0)
 
-echo Adding glib-2.0 CFLAGS ${GLIB_CFLAGS}
+AC_MSG_NOTICE([Adding glib-2.0 CFLAGS ${GLIB_CFLAGS}])
 CFLAGS="${GLIB_CFLAGS} ${CFLAGS}"
-echo Adding glib-2.0 LDFLAGS ${GLIB_LIBS}
+AC_MSG_NOTICE([Adding glib-2.0 LDFLAGS ${GLIB_LIBS}])
 LDFLAGS="${GLIB_LIBS} ${LDFLAGS}"
 
-
 dnl Checks for typedefs, structures, and compiler characteristics.
+
+dnl Support --program-{prefix,suffix,transform}
+AC_ARG_PROGRAM
 
 AC_SUBST(XSUBPPDIR)
 AC_SUBST(XSUBPPFLAGS)

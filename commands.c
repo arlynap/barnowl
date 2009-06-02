@@ -278,7 +278,7 @@ owl_cmd commands_to_init[]
 
   OWLCMD_ARGS("punt", owl_command_punt, OWL_CTX_ANY,
 	      "suppress an arbitrary filter",
-	      "punt <filter-name>",
+	      "punt <filter-text>",
 	      "punt <filter-text (multiple words)>\n"
 	      "The punt command will supress message to the specified\n"
 	      "filter\n\n"
@@ -286,7 +286,7 @@ owl_cmd commands_to_init[]
 
   OWLCMD_ARGS("unpunt", owl_command_unpunt, OWL_CTX_ANY,
 	      "remove an entry from the punt list",
-	      "zpunt <filter-name>\n"
+	      "zpunt <filter-text>\n"
 	      "zpunt <filter-text>\n"
 	      "zpunt <number>\n",
 	      "The unpunt command will remove an entry from the puntlist.\n"
@@ -335,6 +335,14 @@ owl_cmd commands_to_init[]
 
   OWLCMD_VOID("recv:pageup", owl_function_mainwin_pageup, OWL_CTX_INTERACTIVE,
 	      "scrolls up by a page", "", ""),
+
+  OWLCMD_VOID("recv:mark", owl_function_mark_message,
+	      OWL_CTX_INTERACTIVE,
+	      "mark the current message", "", ""),
+
+  OWLCMD_VOID("recv:swapmark", owl_function_swap_cur_marked,
+	      OWL_CTX_INTERACTIVE,
+	      "swap the positions of the pointer and the mark", "", ""),
 
   OWLCMD_INT ("recv:scroll", owl_function_page_curmsg, OWL_CTX_INTERACTIVE,
 	      "scrolls current message up or down", 
@@ -1716,13 +1724,6 @@ char *owl_command_zlog(int argc, char **argv, char *buff)
   return(NULL);
 }
 
-
-void owl_command_zlog_out(void)
-{
-  owl_zephyr_zlog_out();
-}
-
-
 char *owl_command_subscribe(int argc, char **argv, char *buff)
 {
   char *class, *instance, *recip="";
@@ -2576,9 +2577,11 @@ void owl_command_edit_cancel(owl_editwin *e)
 
   owl_function_makemsg("Command cancelled.");
 
-  hist=owl_editwin_get_history(e);
-  owl_history_store(hist, owl_editwin_get_text(e));
-  owl_history_reset(hist);
+  if(e->echochar == 0) {
+    hist=owl_editwin_get_history(e);
+    owl_history_store(hist, owl_editwin_get_text(e));
+    owl_history_reset(hist);
+  }
 
   owl_editwin_fullclear(e);
   owl_global_set_needrefresh(&g);

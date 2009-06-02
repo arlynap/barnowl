@@ -17,7 +17,6 @@ int owl_filter_init_fromstring(owl_filter *f, char *name, char *string)
 int owl_filter_init(owl_filter *f, char *name, int argc, char **argv)
 {
   f->name=owl_strdup(name);
-  f->polarity=0;
   f->fgcolor=OWL_COLOR_DEFAULT;
   f->bgcolor=OWL_COLOR_DEFAULT;
   f->cachedmsgid=-1;
@@ -95,7 +94,9 @@ static owl_filterelement * owl_filter_parse_primitive_expression(int argc, char 
     } else if(!strcasecmp(*argv, "perl")) {
       owl_filterelement_create_perl(fe, *(argv+1));
     } else {
-      owl_filterelement_create_re(fe, *argv, *(argv+1));
+      if(owl_filterelement_create_re(fe, *argv, *(argv+1))) {
+        goto err;
+      }
     }
     i += 2;
   }
@@ -156,16 +157,6 @@ char *owl_filter_get_name(owl_filter *f)
   return(f->name);
 }
 
-void owl_filter_set_polarity_match(owl_filter *f)
-{
-  f->polarity=0;
-}
-
-void owl_filter_set_polarity_unmatch(owl_filter *f)
-{
-  f->polarity=1;
-}
-
 void owl_filter_set_fgcolor(owl_filter *f, int color)
 {
   f->fgcolor=color;
@@ -204,7 +195,6 @@ int owl_filter_message_match(owl_filter *f, owl_message *m)
   int ret;
   if(!f->root) return 0;
   ret = owl_filterelement_match(f->root, m);
-  if(f->polarity) ret = !ret;
   return ret;
 }
 

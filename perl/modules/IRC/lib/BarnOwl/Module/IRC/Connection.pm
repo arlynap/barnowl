@@ -72,6 +72,10 @@ sub new {
     $self->conn->add_handler(namreply  => sub { shift; $self->on_namreply(@_) });
     $self->conn->add_handler(endofnames=> sub { shift; $self->on_endofnames(@_) });
     $self->conn->add_handler(endofwhois=> sub { shift; $self->on_endofwhois(@_) });
+    $self->conn->add_handler(mode      => sub { shift; $self->on_mode(@_) });
+
+    # * nosuchchannel
+    # * 
 
     return $self;
 }
@@ -105,7 +109,6 @@ sub on_msg {
     my ($recipient) = $evt->to;
     my $body = strip_irc_formatting([$evt->args]->[0]);
     my $nick = $self->nick;
-    BarnOwl::beep() if $body =~ /\b\Q$nick\E\b/;
     $body = '* '.$evt->nick.' '.$body if $evt->type eq 'caction';
     my $msg = $self->new_message($evt,
         direction   => 'in',
@@ -270,6 +273,14 @@ sub on_endofwhois {
         $self->whois_tmp
     );
     $self->whois_tmp([]);
+}
+
+sub on_mode {
+    my ($self, $evt) = @_;
+    BarnOwl::admin_message("IRC",
+                           "[" . $self->alias . "] User " . ($evt->nick) . + " set mode " .
+                           join(" ", $evt->args) . "on " . $evt->to->[0]
+                          );
 }
 
 sub on_event {
