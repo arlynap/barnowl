@@ -56,6 +56,11 @@ for my $i (10..20) {
     is($l->[$idx], $i, "binsearch finds an index that exists");
 }
 
+for my $i (10..20) {
+    my $idx = BarnOwl::MessageList::binsearch($l, $i - 0.5);
+    is($l->[$idx], $i, "Finding ${\($i-0.5)} returns where it would be inserted");
+}
+
 diag("Iterate from a point...");
 
 $ml->iterate_begin($ms[5]->id);
@@ -80,3 +85,16 @@ $ml->expunge();
 $ml->iterate_begin(0);
 is($ml->iterate_next()->{num}, 1);
 $ml->iterate_done();
+
+diag("Iterating starting from a hole...");
+
+$ms[5]->delete;
+$ml->expunge;
+
+$ml->iterate_begin($ms[5]->id);
+is($ml->iterate_next()->id, $ms[6]->id, "Iterate forward from a gap");
+$ml->iterate_done;
+
+$ml->iterate_begin($ms[5]->id, -1);
+is($ml->iterate_next()->id, $ms[4]->id, "Iterate backwards from a gap");
+$ml->iterate_done;

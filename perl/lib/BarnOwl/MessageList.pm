@@ -21,6 +21,9 @@ sub binsearch {
             $right = $mid - 1;
         }
     }
+    if($key->($list->[$left]) < $val) {
+        $left++;
+    }
     return $left;
 }
 
@@ -56,6 +59,23 @@ sub get_size {
     return scalar keys %{$self->{messages}};
 }
 
+=head2 iterate_begin ID [REVERSE]
+
+Start an iteration over the message list. Once an iteration has
+started, you can retrieve messages using C<iterate_next>, and stop the
+iteration using C<iterate_done>.
+
+The C<ID> parameter indicates which message to start iterating
+from. If a message with that id exists, it will be the first message
+returned by C<iterate_next>; Otherwise, the first will be the next
+message in iteration order. A negative ID indicates that iteration
+should procede from the end of the message list.
+
+If the C<REVERSE> parameter is true, the iteration will procede in
+direction of decreasing message ID.
+
+=cut
+
 sub iterate_begin {
     my $self = shift;
     my $id   = shift;
@@ -65,10 +85,21 @@ sub iterate_begin {
         $self->{iterator} = scalar @{$self->{keys}} - 1;
     } else {
         $self->{iterator} = binsearch($self->{keys}, $id);
+        if($self->{keys}->[$self->{iterator}] != $id && $rev) {
+            $self->{iterator}--;
+        }
     }
     
     $self->{iterate_direction} = $rev ? -1 : 1;
 }
+
+=head2 iterate_next
+
+Return the next message in the message list, or C<undef> if the
+iteration has completed. See C<iterate_begin> for more information
+about iterating over a message list.
+
+=cut
 
 sub iterate_next {
     my $self = shift;
@@ -81,6 +112,15 @@ sub iterate_next {
     $self->{iterator} += $self->{iterate_direction};
     return $msg;
 }
+
+=head2 iterate_done
+
+Finish iterating over a message list. This must be called once for
+every call to C<iterate_begin>. Only one iteration can be performed at
+a time; It is not at present allowed to do multiple iterations in
+parallel.
+
+=cut
 
 sub iterate_done {
     # nop
