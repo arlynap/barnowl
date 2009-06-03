@@ -10,15 +10,18 @@ sub binsearch {
     my $left = 0;
     my $right = scalar @{$list} - 1;
     my $mid = $left;
-    while($left <= $right) {
-        $mid = ($left + $right)/2;
-        if($key->($list->[$mid]) < $val) {
+    while($left < $right) {
+        $mid = int(($left + $right)/2);
+        my $k = $key->($list->[$mid]);
+        if($k == $val) {
+            return $mid;
+        } elsif ($k < $val) {
             $left = $mid + 1;
         } else {
             $right = $mid - 1;
         }
     }
-    return $mid;
+    return $left;
 }
 
 my $__next_id = 0;
