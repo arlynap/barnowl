@@ -34,17 +34,6 @@ sub next_id {
 }
 
 sub new {
-    my $ml;
-    eval q{
-        use BarnOwl::MessageList::SQL;
-        $ml = BarnOwl::MessageList::SQL->new;
-    };
-    
-    if($@) {
-        push @BarnOwl::__startup_errors, "Unable to load SQL message list\n$@";
-    } else {
-        return $ml;
-    }
     my $class = shift;
     my $self = {messages => {}};
     return bless $self, $class;
